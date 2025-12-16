@@ -52,13 +52,6 @@ CREATE INVERTED INDEX logs_line_idx ON logs(line);
 
 Extra optimizations (optional but recommended, mix and match as needed):
 
-```sql
-ALTER TABLE logs ADD BLOOM FILTER INDEX idx_stream(stream_hash);
-ALTER TABLE logs ADD BLOOM FILTER INDEX idx_labels_app (labels['app']);
-ALTER TABLE logs ADD BLOOM FILTER INDEX idx_labels_host (labels['host']);
-ALTER TABLE logs ADD MINMAX INDEX logs_timestamp_idx(timestamp);
-```
-
 ### Flat schema
 
 Use this schema when logs arrive in a wide table where each attribute is already a separate column. The adapter chooses the timestamp column, picks one string column for the log line (either auto-detected or provided via `--line-column`), and treats every other column as a label. The examples below illustrate common shapes; substitute your own column names and indexes.
@@ -94,16 +87,19 @@ Guidelines:
 
 - If the table does not have an obvious log-line column, pass `--line-column` (e.g., `--line-column request` for `nginx_logs`, or `--line-column message` for `kubernetes_logs`). The column may be nullable; the adapter will emit empty strings when needed.
 - Every other column automatically becomes a LogQL label. These columns hold the actual metadata you want to query (`client`, `host`, `status`, `pod_name`, `pod_namespace`, `cluster_name`, etc.). Use Databend's SQL to rename or cast fields if you need canonical label names.
-- Add bloom filter or inverted indexes as appropriate for your query workload. For example:
 
   ```sql
   CREATE INVERTED INDEX nginx_request_idx ON nginx_logs(request);
   CREATE INVERTED INDEX k8s_message_idx ON kubernetes_logs(message);
-  ALTER TABLE nginx_logs ADD BLOOM FILTER INDEX nginx_host_idx(host);
-  ALTER TABLE nginx_logs ADD BLOOM FILTER INDEX nginx_status_idx(status);
-  ALTER TABLE kubernetes_logs ADD BLOOM FILTER INDEX k8s_pod_idx(pod_name);
-  ALTER TABLE kubernetes_logs ADD MINMAX INDEX k8s_time_idx(log_time);
   ```
+
+## Index guidance
+
+Databend only requires manual management for inverted indexes. See the official docs for [inverted indexes](https://docs.databend.com/sql/sql-commands/ddl/inverted-index/) and the dedicated [`CREATE INVERTED INDEX`](https://docs.databend.com/sql/sql-commands/ddl/inverted-index/create-inverted-index) and [`REFRESH INVERTED INDEX`](https://docs.databend.com/sql/sql-commands/ddl/inverted-index/refresh-inverted-index) statements. Bloom filter style pruning for MAP/VARIANT columns is built in, so you do not need to create standalone bloom filter or minmax indexes. Remember to refresh a newly created inverted index so historical data becomes searchable, e.g.:
+
+```sql
+REFRESH INVERTED INDEX logs_line_idx ON logs;
+```
 
 ## Metadata lookup
 
