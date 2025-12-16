@@ -14,7 +14,8 @@
 
 use std::collections::BTreeMap;
 
-use databend_driver::Row;
+use databend_driver::{Client, Row};
+use log::info;
 
 use crate::{
     error::AppError,
@@ -22,9 +23,10 @@ use crate::{
 };
 
 use super::core::{
-    LogEntry, QueryBounds, SchemaConfig, TableColumn, TableRef, ensure_line_column,
-    ensure_timestamp_column, escape, is_line_candidate, line_filter_clause, matches_named_column,
-    missing_required_column, quote_ident, timestamp_literal, value_to_string, value_to_timestamp,
+    LabelQueryBounds, LogEntry, QueryBounds, SchemaConfig, TableColumn, TableRef, ensure_line_column,
+    ensure_timestamp_column, escape, execute_query, is_line_candidate, line_filter_clause,
+    matches_named_column, missing_required_column, quote_ident, timestamp_literal, value_to_string,
+    value_to_timestamp,
 };
 
 #[derive(Clone)]
@@ -106,6 +108,60 @@ impl FlatSchema {
         })
     }
 
+    pub(crate) fn list_labels(&self) -> Vec<String> {
+        let mut labels = self.label_cols.clone();
+        labels.sort();
+        labels
+    }
+
+    pub(crate) async fn list_label_values(
+        &self,
+        client: &Client,
+        table: &TableRef,
+        label: &str,
+        bounds: &LabelQueryBounds,
+    ) -> Result<Vec<String>, AppError> {
+        let column = self
+            .label_cols
+            .iter()
+            .find(|col| col.eq_ignore_ascii_case(label))
+            .ok_or_else(|| {
+                AppError::BadRequest(format!("label `{label}` is not available in flat schema"))
+            })?;
+        let mut clauses = Vec::new();
+        let ts_col = quote_ident(&self.timestamp_col);
+        if let Some(start) = bounds.start_ns {
+            clauses.push(format!("{ts_col} >= {}", timestamp_literal(start)?));
+        }
+        if let Some(end) = bounds.end_ns {
+            clauses.push(format!("{ts_col} <= {}", timestamp_literal(end)?));
+        }
+        let label_col = quote_ident(column);
+        clauses.push(format!("{label_col} IS NOT NULL"));
+        let where_clause = if clauses.is_empty() {
+            "1=1".to_string()
+        } else {
+            clauses.join(" AND ")
+        };
+        let sql = format!(
+            "SELECT DISTINCT {label_col} FROM {table} WHERE {where} ORDER BY {label_col}",
+            label_col = label_col,
+            table = table.fq_name(),
+            where = where_clause
+        );
+        let rows = execute_query(client, &sql).await?;
+        let mut values = Vec::with_capacity(rows.len());
+        for row in rows {
+            if let Some(value) = row.values().first() {
+                let text = value_to_string(value);
+                if !text.is_empty() {
+                    values.push(text);
+                }
+            }
+        }
+        Ok(values)
+    }
+
     pub(crate) fn from_columns(
         columns: Vec<TableColumn>,
         config: &SchemaConfig,
@@ -171,11 +227,16 @@ impl FlatSchema {
             column
         };
 
-        let label_cols = label_cols
+        let label_cols: Vec<String> = label_cols
             .into_iter()
             .filter(|col| col.name != line.name)
-            .map(|col| col.name)
+            .map(|col| col.name.clone())
             .collect();
+
+        info!(
+            "flat schema resolved: timestamp=`{}`, line=`{}`, labels={:?}",
+            timestamp.name, line.name, label_cols
+        );
 
         Ok(Self {
             timestamp_col: timestamp.name,

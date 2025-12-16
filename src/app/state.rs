@@ -16,7 +16,10 @@ use databend_driver::Client;
 use log::{info, warn};
 
 use crate::{
-    databend::{SchemaAdapter, SchemaConfig, SchemaType, TableRef, load_schema, resolve_table_ref},
+    databend::{
+        LabelQueryBounds, SchemaAdapter, SchemaConfig, SchemaType, TableRef, load_schema,
+        resolve_table_ref,
+    },
     error::AppError,
     logql::{LogqlExpr, LogqlParser},
 };
@@ -86,6 +89,22 @@ impl AppState {
             .and_then(|value| (value > 0).then_some(value))
             .map(|value| value.min(MAX_LIMIT))
             .unwrap_or(DEFAULT_LIMIT)
+    }
+
+    pub async fn list_labels(&self, bounds: LabelQueryBounds) -> Result<Vec<String>, AppError> {
+        self.schema
+            .list_labels(self.client(), self.table(), &bounds)
+            .await
+    }
+
+    pub async fn list_label_values(
+        &self,
+        label: &str,
+        bounds: LabelQueryBounds,
+    ) -> Result<Vec<String>, AppError> {
+        self.schema
+            .list_label_values(self.client(), self.table(), label, &bounds)
+            .await
     }
 }
 

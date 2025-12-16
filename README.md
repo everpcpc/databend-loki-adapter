@@ -5,23 +5,22 @@ Databend Loki Adapter exposes a minimal Loki-compatible HTTP API. It parses LogQ
 ## Getting Started
 
 ```bash
-databend-loki-adapter \
-  --dsn "databend://user:pass@host:port/default" \
-  --table logs \
-  --schema-type loki
+export DATABEND_DSN="databend://user:pass@host:port/default"
+databend-loki-adapter --table logs --schema-type loki
 ```
 
-The adapter listens on `--bind` (default `0.0.0.0:3100`) and serves `/loki/api/v1/query` and `/loki/api/v1/query_range`.
+The adapter listens on `--bind` (default `0.0.0.0:3100`) and exposes a minimal subset of the Loki HTTP surface area.
 
-## Logging
+## HTTP API
 
-By default the adapter configures `env_logger` with `databend_loki_adapter` at `info` level and every other module at `warn`. This keeps the startup flow visible without flooding the console with dependency logs. To override the levels, set `RUST_LOG` just like any other `env_logger` application, e.g.:
+| Endpoint | Description |
+| --- | --- |
+| `GET /loki/api/v1/query` | Instant query. Supports the same LogQL used by Grafana’s Explore panel. An optional `time` parameter (nanoseconds) defaults to “now”, and the adapter automatically looks back 5 minutes when computing SQL bounds. |
+| `GET /loki/api/v1/query_range` | Range query. Requires `start`/`end` nanoseconds and accepts `limit`/`step`. The `step` parameter is parsed but ignored because the adapter streams raw log lines. |
+| `GET /loki/api/v1/labels` | Lists known label keys for the selected schema. Optional `start`/`end` parameters (nanoseconds) fence the search window; unspecified values default to the last 5 minutes. |
+| `GET /loki/api/v1/label/{label}/values` | Lists distinct values for a specific label key using the same optional `start`/`end` bounds as `/labels`. Works for both `loki` and `flat` schemas. |
 
-```bash
-RUST_LOG=databend_loki_adapter=debug,databend_driver=info databend-loki-adapter \
-  --dsn "databend://user:pass@host:port/default" \
-  --table logs
-```
+All endpoints return Loki-compatible JSON, so Grafana can reuse its native Loki data source without additional plugins.
 
 ## Configuration
 
@@ -120,11 +119,25 @@ Guidelines:
 The adapter validates table shape with:
 
 ```sql
-SELECT column_name, data_type
+SELECT name, data_type
 FROM system.columns
 WHERE database = '<database>'
   AND table = '<table>'
-ORDER BY ordinal_position;
+ORDER BY name;
 ```
 
 Ensure the table matches one of the schemas above (including indexes) so Grafana can issue LogQL queries directly against Databend through this adapter.
+
+## Logging
+
+By default the adapter configures `env_logger` with `databend_loki_adapter` at `info` level and every other module at `warn`. This keeps the startup flow visible without flooding the console with dependency logs. To override the levels, set `RUST_LOG` just like any other `env_logger` application, e.g.:
+
+```bash
+RUST_LOG=databend_loki_adapter=debug,databend_driver=info databend-loki-adapter \
+  --dsn "databend://user:pass@host:port/default" \
+  --table logs
+```
+
+## Testing
+
+Run the Rust test suite with `cargo nextest run`.

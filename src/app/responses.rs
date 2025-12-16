@@ -80,11 +80,27 @@ pub(crate) struct LokiResponse {
 
 impl LokiResponse {
     pub(crate) fn success(streams: Vec<LokiStream>) -> Self {
+        Self::streams(streams)
+    }
+
+    pub(crate) fn streams(streams: Vec<LokiStream>) -> Self {
         Self {
             status: "success",
             data: LokiData {
-                result_type: "streams",
-                result: streams,
+                result: LokiResult::Streams { result: streams },
+            },
+        }
+    }
+
+    pub(crate) fn vector_constant(timestamp_ns: i64, value: f64) -> Self {
+        Self::vector(vec![LokiVectorSample::constant(timestamp_ns, value)])
+    }
+
+    pub(crate) fn vector(samples: Vec<LokiVectorSample>) -> Self {
+        Self {
+            status: "success",
+            data: LokiData {
+                result: LokiResult::Vector { result: samples },
             },
         }
     }
@@ -92,13 +108,86 @@ impl LokiResponse {
 
 #[derive(Serialize)]
 struct LokiData {
-    #[serde(rename = "resultType")]
-    result_type: &'static str,
-    result: Vec<LokiStream>,
+    #[serde(flatten)]
+    result: LokiResult,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "resultType")]
+enum LokiResult {
+    #[serde(rename = "streams")]
+    Streams { result: Vec<LokiStream> },
+    #[serde(rename = "vector")]
+    Vector { result: Vec<LokiVectorSample> },
 }
 
 #[derive(Serialize)]
 pub(crate) struct LokiStream {
     stream: BTreeMap<String, String>,
     values: Vec<[String; 2]>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct LokiVectorSample {
+    metric: BTreeMap<String, String>,
+    value: VectorValue,
+}
+
+impl LokiVectorSample {
+    pub(crate) fn constant(timestamp_ns: i64, value: f64) -> Self {
+        Self {
+            metric: BTreeMap::new(),
+            value: VectorValue::new(timestamp_ns, value),
+        }
+    }
+}
+
+struct VectorValue {
+    timestamp: f64,
+    value: String,
+}
+
+impl VectorValue {
+    fn new(timestamp_ns: i64, value: f64) -> Self {
+        Self {
+            timestamp: timestamp_ns as f64 / 1_000_000_000_f64,
+            value: format_value(value),
+        }
+    }
+}
+
+impl Serialize for VectorValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeSeq;
+        let mut seq = serializer.serialize_seq(Some(2))?;
+        seq.serialize_element(&self.timestamp)?;
+        seq.serialize_element(&self.value)?;
+        seq.end()
+    }
+}
+
+fn format_value(value: f64) -> String {
+    if value.fract() == 0.0 {
+        format!("{:.0}", value)
+    } else {
+        value.to_string()
+    }
+}
+
+#[derive(Serialize)]
+pub(crate) struct LabelsResponse {
+    status: &'static str,
+    data: Vec<String>,
+}
+
+impl LabelsResponse {
+    pub(crate) fn success(labels: Vec<String>) -> Self {
+        Self {
+            status: "success",
+            data: labels,
+        }
+    }
 }

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use databend_driver::Row;
+use databend_driver::{Client, Row};
 
 use crate::{
     error::AppError,
@@ -20,10 +20,10 @@ use crate::{
 };
 
 use super::core::{
-    LogEntry, QueryBounds, SchemaConfig, TableColumn, TableRef, ensure_labels_column,
-    ensure_line_column, ensure_timestamp_column, escape, line_filter_clause, matches_line_column,
-    matches_named_column, missing_required_column, parse_labels_value, quote_ident,
-    timestamp_literal, value_to_string, value_to_timestamp,
+    LabelQueryBounds, LogEntry, QueryBounds, SchemaConfig, TableColumn, TableRef,
+    ensure_labels_column, ensure_line_column, ensure_timestamp_column, escape, execute_query,
+    line_filter_clause, matches_line_column, matches_named_column, missing_required_column,
+    parse_labels_value, quote_ident, timestamp_literal, value_to_string, value_to_timestamp,
 };
 
 #[derive(Clone)]
@@ -154,6 +154,103 @@ impl LokiSchema {
             labels_col,
             line_col,
         })
+    }
+
+    pub(crate) async fn list_labels(
+        &self,
+        client: &Client,
+        table: &TableRef,
+        bounds: &LabelQueryBounds,
+    ) -> Result<Vec<String>, AppError> {
+        let mut clauses = Vec::new();
+        if let Some(start) = bounds.start_ns {
+            clauses.push(format!(
+                "{} >= {}",
+                quote_ident(&self.timestamp_col),
+                timestamp_literal(start)?
+            ));
+        }
+        if let Some(end) = bounds.end_ns {
+            clauses.push(format!(
+                "{} <= {}",
+                quote_ident(&self.timestamp_col),
+                timestamp_literal(end)?
+            ));
+        }
+        let mut where_clause = if clauses.is_empty() {
+            "1=1".to_string()
+        } else {
+            clauses.join(" AND ")
+        };
+        where_clause.push_str(" AND f.value IS NOT NULL");
+        let sql = format!("SELECT DISTINCT f.value AS label \
+                FROM {table}, LATERAL FLATTEN(input => map_keys({labels})) AS f \
+                WHERE {where} \
+                ORDER BY label",
+            table = table.fq_name(),
+            labels = quote_ident(&self.labels_col),
+            where = where_clause,
+        );
+        let rows = execute_query(client, &sql).await?;
+        let mut labels = Vec::with_capacity(rows.len());
+        for row in rows {
+            if let Some(value) = row.values().first() {
+                let label = value_to_string(value);
+                if !label.is_empty() {
+                    labels.push(label);
+                }
+            }
+        }
+        Ok(labels)
+    }
+
+    pub(crate) async fn list_label_values(
+        &self,
+        client: &Client,
+        table: &TableRef,
+        label: &str,
+        bounds: &LabelQueryBounds,
+    ) -> Result<Vec<String>, AppError> {
+        let mut clauses = Vec::new();
+        if let Some(start) = bounds.start_ns {
+            clauses.push(format!(
+                "{} >= {}",
+                quote_ident(&self.timestamp_col),
+                timestamp_literal(start)?
+            ));
+        }
+        if let Some(end) = bounds.end_ns {
+            clauses.push(format!(
+                "{} <= {}",
+                quote_ident(&self.timestamp_col),
+                timestamp_literal(end)?
+            ));
+        }
+        let labels = quote_ident(&self.labels_col);
+        let escaped_label = escape(label);
+        let target = format!("{labels}['{escaped_label}']");
+        clauses.push(format!("{target} IS NOT NULL"));
+        let where_clause = if clauses.is_empty() {
+            "1=1".to_string()
+        } else {
+            clauses.join(" AND ")
+        };
+        let sql = format!(
+            "SELECT DISTINCT {target} AS value FROM {table} WHERE {where} ORDER BY value",
+            table = table.fq_name(),
+            where = where_clause
+        );
+        let rows = execute_query(client, &sql).await?;
+        let mut values = Vec::with_capacity(rows.len());
+        for row in rows {
+            if let Some(value) = row.values().first() {
+                let text = value_to_string(value);
+                if !text.is_empty() {
+                    values.push(text);
+                }
+            }
+        }
+        Ok(values)
     }
 }
 

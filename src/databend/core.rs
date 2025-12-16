@@ -94,6 +94,35 @@ impl SchemaAdapter {
             SchemaAdapter::Flat(schema) => schema.parse_row(row),
         }
     }
+
+    pub async fn list_labels(
+        &self,
+        client: &Client,
+        table: &TableRef,
+        bounds: &LabelQueryBounds,
+    ) -> Result<Vec<String>, AppError> {
+        match self {
+            SchemaAdapter::Loki(schema) => schema.list_labels(client, table, bounds).await,
+            SchemaAdapter::Flat(schema) => Ok(schema.list_labels()),
+        }
+    }
+
+    pub async fn list_label_values(
+        &self,
+        client: &Client,
+        table: &TableRef,
+        label: &str,
+        bounds: &LabelQueryBounds,
+    ) -> Result<Vec<String>, AppError> {
+        match self {
+            SchemaAdapter::Loki(schema) => {
+                schema.list_label_values(client, table, label, bounds).await
+            }
+            SchemaAdapter::Flat(schema) => {
+                schema.list_label_values(client, table, label, bounds).await
+            }
+        }
+    }
 }
 
 pub struct QueryBounds {
@@ -101,6 +130,12 @@ pub struct QueryBounds {
     pub end_ns: Option<i64>,
     pub limit: u64,
     pub order: SqlOrder,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct LabelQueryBounds {
+    pub start_ns: Option<i64>,
+    pub end_ns: Option<i64>,
 }
 
 #[derive(Clone, Copy)]
