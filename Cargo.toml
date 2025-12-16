@@ -2,6 +2,15 @@
 name = "databend-loki-adapter"
 version = "0.1.0"
 edition = "2024"
+description = "Loki-compatible HTTP adapter that runs LogQL queries against Databend"
+license = "Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/databendlabs/databend-loki-adapter"
+homepage = "https://www.databend.com"
+documentation = "https://github.com/databendlabs/databend-loki-adapter"
+authors = ["Databend Authors <opensource@databend.com>"]
+keywords = ["databend", "loki", "grafana", "logs", "database"]
+categories = ["database", "command-line-utilities", "visualization"]
 
 [dependencies]
 axum = "0.8.7"
