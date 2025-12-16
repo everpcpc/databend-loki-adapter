@@ -23,10 +23,10 @@ use crate::{
 };
 
 use super::core::{
-    LabelQueryBounds, LogEntry, QueryBounds, SchemaConfig, TableColumn, TableRef, ensure_line_column,
-    ensure_timestamp_column, escape, execute_query, is_line_candidate, line_filter_clause,
-    matches_named_column, missing_required_column, quote_ident, timestamp_literal, value_to_string,
-    value_to_timestamp,
+    LabelQueryBounds, LogEntry, QueryBounds, SchemaConfig, TableColumn, TableRef,
+    ensure_line_column, ensure_timestamp_column, escape, execute_query, is_line_candidate,
+    line_filter_clause, matches_named_column, missing_required_column, quote_ident,
+    timestamp_literal, value_to_timestamp,
 };
 
 #[derive(Clone)]
@@ -95,10 +95,10 @@ impl FlatSchema {
             ));
         }
         let timestamp_ns = value_to_timestamp(&values[0])?;
-        let line = value_to_string(&values[1]);
+        let line = values[1].to_string();
         let mut labels = BTreeMap::new();
         for (idx, key) in self.label_cols.iter().enumerate() {
-            let value = value_to_string(&values[idx + 2]);
+            let value = values[idx + 2].to_string();
             labels.insert(key.clone(), value);
         }
         Ok(LogEntry {
@@ -153,7 +153,7 @@ impl FlatSchema {
         let mut values = Vec::with_capacity(rows.len());
         for row in rows {
             if let Some(value) = row.values().first() {
-                let text = value_to_string(value);
+                let text = value.to_string();
                 if !text.is_empty() {
                     values.push(text);
                 }

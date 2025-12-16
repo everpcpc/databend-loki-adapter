@@ -216,8 +216,8 @@ async fn fetch_columns(client: &Client, table: &TableRef) -> Result<Vec<TableCol
         if values.len() < 2 {
             continue;
         }
-        let name = value_to_string(&values[0]);
-        let data_type = value_to_string(&values[1]);
+        let name = values[0].to_string();
+        let data_type = values[1].to_string();
         columns.push(TableColumn { name, data_type });
     }
     Ok(columns)
@@ -340,20 +340,6 @@ pub(crate) fn value_to_timestamp(value: &Value) -> Result<i128, AppError> {
         _ => Err(AppError::Internal(
             "timestamp column has unexpected type".into(),
         )),
-    }
-}
-
-pub(crate) fn value_to_string(value: &Value) -> String {
-    match value {
-        Value::Null => "".into(),
-        Value::Boolean(v) => v.to_string(),
-        Value::String(v) => v.clone(),
-        Value::Variant(v) => v.clone(),
-        Value::Number(n) => format!("{:?}", n),
-        Value::Date(v) => v.to_string(),
-        Value::Timestamp(v) | Value::TimestampTz(v) => v.timestamp().to_string(),
-        Value::Binary(bin) => String::from_utf8_lossy(bin).to_string(),
-        other => format!("{other:?}"),
     }
 }
 

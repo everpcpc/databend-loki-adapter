@@ -23,7 +23,7 @@ use super::core::{
     LabelQueryBounds, LogEntry, QueryBounds, SchemaConfig, TableColumn, TableRef,
     ensure_labels_column, ensure_line_column, ensure_timestamp_column, escape, execute_query,
     line_filter_clause, matches_line_column, matches_named_column, missing_required_column,
-    parse_labels_value, quote_ident, timestamp_literal, value_to_string, value_to_timestamp,
+    parse_labels_value, quote_ident, timestamp_literal, value_to_timestamp,
 };
 
 #[derive(Clone)]
@@ -92,7 +92,7 @@ impl LokiSchema {
         }
         let timestamp_ns = value_to_timestamp(&row.values()[0])?;
         let labels = parse_labels_value(&row.values()[1])?;
-        let line = value_to_string(&row.values()[2]);
+        let line = row.values()[2].to_string();
         Ok(LogEntry {
             timestamp_ns,
             labels,
@@ -195,7 +195,7 @@ impl LokiSchema {
         let mut labels = Vec::with_capacity(rows.len());
         for row in rows {
             if let Some(value) = row.values().first() {
-                let label = value_to_string(value);
+                let label = value.to_string();
                 if !label.is_empty() {
                     labels.push(label);
                 }
@@ -244,7 +244,7 @@ impl LokiSchema {
         let mut values = Vec::with_capacity(rows.len());
         for row in rows {
             if let Some(value) = row.values().first() {
-                let text = value_to_string(value);
+                let text = value.to_string();
                 if !text.is_empty() {
                     values.push(text);
                 }
