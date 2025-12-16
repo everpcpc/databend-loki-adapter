@@ -231,3 +231,51 @@ fn is_label_start(ch: char) -> bool {
 fn is_label_char(ch: char) -> bool {
     is_label_start(ch) || ch.is_ascii_digit() || matches!(ch, ':' | '.' | '-')
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parser() -> LogqlParser {
+        LogqlParser::default()
+    }
+
+    #[test]
+    fn parse_basic_selector() {
+        let expr = parser().parse("{app=\"loki\",env!=\"prod\"}").unwrap();
+        assert_eq!(expr.selectors.len(), 2);
+        assert_eq!(expr.filters.len(), 0);
+        assert_eq!(expr.selectors[0].key, "app");
+        assert!(matches!(expr.selectors[0].op, LabelOp::Eq));
+        assert_eq!(expr.selectors[0].value, "loki");
+        assert_eq!(expr.selectors[1].key, "env");
+        assert!(matches!(expr.selectors[1].op, LabelOp::NotEq));
+        assert_eq!(expr.selectors[1].value, "prod");
+    }
+
+    #[test]
+    fn parse_with_filters_and_escaped_string() {
+        let expr = parser()
+            .parse("{app=\"loki\"} |= \"error\\\"\" |~ \"warn\\n\" != \"drop\" !~ \"panic\"")
+            .unwrap();
+        assert_eq!(expr.filters.len(), 4);
+        assert_eq!(expr.filters[0].value, "error\"");
+        assert!(matches!(expr.filters[0].op, LineFilterOp::Contains));
+        assert_eq!(expr.filters[1].value, "warn\n");
+        assert!(matches!(expr.filters[1].op, LineFilterOp::Regex));
+        assert!(matches!(expr.filters[2].op, LineFilterOp::NotContains));
+        assert!(matches!(expr.filters[3].op, LineFilterOp::NotRegex));
+    }
+
+    #[test]
+    fn parse_fail_on_incomplete_string() {
+        let err = parser().parse("{app=\"loki}").unwrap_err();
+        assert!(matches!(err, LogqlError::Invalid(_)));
+    }
+
+    #[test]
+    fn parse_fail_on_missing_brace() {
+        let err = parser().parse("{app=\"loki\"").unwrap_err();
+        assert!(matches!(err, LogqlError::Invalid(_)));
+    }
+}
