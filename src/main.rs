@@ -35,7 +35,7 @@ struct Args {
     #[arg(long, env = "LOGS_TABLE", default_value = "logs")]
     table: String,
     /// HTTP bind address for the adapter server
-    #[arg(long = "bind", env = "BIND_ADDR", default_value = "0.0.0.0:8080")]
+    #[arg(long = "bind", env = "BIND_ADDR", default_value = "0.0.0.0:3100")]
     bind: SocketAddr,
     /// Schema interpretation for the table (loki for labels as VARIANT or flat for wide table)
     #[arg(

@@ -11,7 +11,7 @@ databend-loki-adapter \
   --schema-type loki
 ```
 
-The adapter listens on `--bind` (default `0.0.0.0:8080`) and serves `/loki/api/v1/query` and `/loki/api/v1/query_range`.
+The adapter listens on `--bind` (default `0.0.0.0:3100`) and serves `/loki/api/v1/query` and `/loki/api/v1/query_range`.
 
 ## Logging
 
@@ -29,7 +29,7 @@ RUST_LOG=databend_loki_adapter=debug,databend_driver=info databend-loki-adapter 
 | -------------------- | ------------------ | ----------------------- | ----------------------------------------------------------------- |
 | `--dsn`              | `DATABEND_DSN`     | _required_              | Databend DSN with credentials and optional default database.      |
 | `--table`            | `LOGS_TABLE`       | `logs`                  | Target table. Use `db.table` or rely on the DSN default database. |
-| `--bind`             | `BIND_ADDR`        | `0.0.0.0:8080`          | HTTP bind address.                                                |
+| `--bind`             | `BIND_ADDR`        | `0.0.0.0:3100`          | HTTP bind address.                                                |
 | `--schema-type`      | `SCHEMA_TYPE`      | `loki`                  | `loki` (labels as VARIANT) or `flat` (wide table).                |
 | `--timestamp-column` | `TIMESTAMP_COLUMN` | auto-detect             | Override the timestamp column name.                               |
 | `--line-column`      | `LINE_COLUMN`      | auto-detect             | Override the log line column name.                                |
