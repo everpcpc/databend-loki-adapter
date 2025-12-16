@@ -1,0 +1,12 @@
+[package]
+name = "databend-loki-adapter"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = "0.8.7"
+databend-driver = "0.32.0"
+nom = "8.0.0"
+serde = "1.0.228"
+serde_json = "1.0.145"
+tokio = "1.48.0"
