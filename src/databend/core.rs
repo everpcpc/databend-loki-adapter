@@ -15,12 +15,12 @@
 use std::{collections::BTreeMap, fmt::Display};
 
 use chrono::{TimeZone, Utc};
-use databend_driver::{Client, Row, Value};
+use databend_driver::{Client, NumberValue, Row, Value};
 use url::Url;
 
 use crate::{
     error::AppError,
-    logql::{LineFilter, LineFilterOp, LogqlExpr},
+    logql::{LineFilter, LineFilterOp, LogqlExpr, MetricExpr, RangeFunction, VectorAggregationOp},
 };
 
 use super::{flat::FlatSchema, loki::LokiSchema};
@@ -96,6 +96,46 @@ impl SchemaAdapter {
         }
     }
 
+    pub fn build_metric_query(
+        &self,
+        table: &TableRef,
+        expr: &MetricExpr,
+        bounds: &MetricQueryBounds,
+    ) -> Result<MetricQueryPlan, AppError> {
+        match self {
+            SchemaAdapter::Loki(schema) => schema.build_metric_query(table, expr, bounds),
+            SchemaAdapter::Flat(schema) => schema.build_metric_query(table, expr, bounds),
+        }
+    }
+
+    pub fn parse_metric_rows(
+        &self,
+        rows: Vec<Row>,
+        plan: &MetricQueryPlan,
+    ) -> Result<Vec<MetricSample>, AppError> {
+        parse_metric_rows(rows, plan)
+    }
+
+    pub fn build_metric_range_query(
+        &self,
+        table: &TableRef,
+        expr: &MetricExpr,
+        bounds: &MetricRangeQueryBounds,
+    ) -> Result<MetricRangeQueryPlan, AppError> {
+        match self {
+            SchemaAdapter::Loki(schema) => schema.build_metric_range_query(table, expr, bounds),
+            SchemaAdapter::Flat(schema) => schema.build_metric_range_query(table, expr, bounds),
+        }
+    }
+
+    pub fn parse_metric_matrix_rows(
+        &self,
+        rows: Vec<Row>,
+        plan: &MetricRangeQueryPlan,
+    ) -> Result<Vec<MetricMatrixSample>, AppError> {
+        parse_metric_matrix_rows(rows, plan)
+    }
+
     pub async fn list_labels(
         &self,
         client: &Client,
@@ -133,6 +173,18 @@ pub struct QueryBounds {
     pub order: SqlOrder,
 }
 
+pub struct MetricQueryBounds {
+    pub start_ns: i64,
+    pub end_ns: i64,
+}
+
+pub struct MetricRangeQueryBounds {
+    pub start_ns: i64,
+    pub end_ns: i64,
+    pub step_ns: i64,
+    pub window_ns: i64,
+}
+
 #[derive(Clone, Copy, Default)]
 pub struct LabelQueryBounds {
     pub start_ns: Option<i64>,
@@ -159,6 +211,37 @@ pub struct LogEntry {
     pub timestamp_ns: i128,
     pub labels: BTreeMap<String, String>,
     pub line: String,
+}
+
+#[derive(Clone)]
+pub struct MetricSample {
+    pub labels: BTreeMap<String, String>,
+    pub value: f64,
+}
+
+#[derive(Clone)]
+pub struct MetricMatrixSample {
+    pub labels: BTreeMap<String, String>,
+    pub timestamp_ns: i64,
+    pub value: f64,
+}
+
+#[derive(Clone)]
+pub struct MetricQueryPlan {
+    pub sql: String,
+    pub labels: MetricLabelsPlan,
+}
+
+#[derive(Clone)]
+pub struct MetricRangeQueryPlan {
+    pub sql: String,
+    pub labels: MetricLabelsPlan,
+}
+
+#[derive(Clone)]
+pub enum MetricLabelsPlan {
+    LokiFull,
+    Columns(Vec<String>),
 }
 
 #[derive(Clone)]
@@ -402,4 +485,231 @@ fn escape_sql(value: &str) -> String {
 
 pub(crate) fn quote_ident(ident: &str) -> String {
     format!("`{}`", ident.replace('`', "``"))
+}
+
+pub(crate) fn format_float_literal(value: f64) -> String {
+    let mut text = format!("{value:.9}");
+    if text.contains('.') {
+        while text.ends_with('0') {
+            text.pop();
+        }
+        if text.ends_with('.') {
+            text.pop();
+        }
+    }
+    if text.is_empty() { "0".into() } else { text }
+}
+
+pub(crate) fn aggregate_value_select(op: VectorAggregationOp, value_ident: &str) -> String {
+    match op {
+        VectorAggregationOp::Sum => format!("SUM({value_ident}) AS value"),
+        VectorAggregationOp::Avg => format!("AVG({value_ident}) AS value"),
+        VectorAggregationOp::Min => format!("MIN({value_ident}) AS value"),
+        VectorAggregationOp::Max => format!("MAX({value_ident}) AS value"),
+        VectorAggregationOp::Count => "COUNT(*) AS value".to_string(),
+    }
+}
+
+pub(crate) fn range_bucket_value_expression(
+    function: RangeFunction,
+    window_ns: i64,
+    ts_ident: &str,
+) -> String {
+    match function {
+        RangeFunction::CountOverTime => format!("COUNT({ts_ident})"),
+        RangeFunction::Rate => {
+            let seconds = window_ns as f64 / 1_000_000_000_f64;
+            let literal = format_float_literal(seconds);
+            format!("COUNT({ts_ident}) / {literal}")
+        }
+    }
+}
+
+pub(crate) fn metric_bucket_cte(bounds: &MetricRangeQueryBounds) -> Result<String, AppError> {
+    let step_us = bounds
+        .step_ns
+        .checked_div(1_000)
+        .ok_or_else(|| AppError::BadRequest("metric step must be at least 1 microsecond".into()))?;
+    if step_us == 0 {
+        return Err(AppError::BadRequest(
+            "metric step must be at least 1 microsecond".into(),
+        ));
+    }
+    Ok(format!(
+        "SELECT generate_series AS bucket_start FROM generate_series({start}, {end}, {step})",
+        start = timestamp_literal(bounds.start_ns)?,
+        end = timestamp_literal(bounds.end_ns)?,
+        step = step_us
+    ))
+}
+
+pub(crate) fn timestamp_offset_expr(base_expr: &str, offset_ns: i64) -> String {
+    let mut expr = base_expr.to_string();
+    let seconds = offset_ns / 1_000_000_000;
+    let micros = (offset_ns % 1_000_000_000) / 1_000;
+    if seconds != 0 {
+        expr = format!("date_add('second', {seconds}, {expr})");
+    }
+    if micros != 0 {
+        expr = format!("date_add('microsecond', {micros}, {expr})");
+    }
+    expr
+}
+
+fn timestamp_value_to_i64(value: &Value) -> Result<i64, AppError> {
+    let ns = value_to_timestamp(value)?;
+    i64::try_from(ns)
+        .map_err(|_| AppError::Internal("timestamp column is outside supported range".into()))
+}
+
+fn parse_metric_rows(
+    rows: Vec<Row>,
+    plan: &MetricQueryPlan,
+) -> Result<Vec<MetricSample>, AppError> {
+    let mut samples = Vec::with_capacity(rows.len());
+    for row in rows {
+        let values = row.values();
+        if values.is_empty() {
+            continue;
+        }
+        let value_cell = values
+            .last()
+            .ok_or_else(|| AppError::Internal("metric row is missing value column".into()))?;
+        let value = metric_value(value_cell)?;
+        let labels = match &plan.labels {
+            MetricLabelsPlan::LokiFull => {
+                if values.len() < 2 {
+                    return Err(AppError::Internal(
+                        "metric row is missing labels column".into(),
+                    ));
+                }
+                parse_labels_value(&values[0])?
+            }
+            MetricLabelsPlan::Columns(names) => {
+                if values.len() < names.len() + 1 {
+                    return Err(AppError::Internal(
+                        "metric row returned fewer columns than expected".into(),
+                    ));
+                }
+                let mut labels = BTreeMap::new();
+                for (idx, key) in names.iter().enumerate() {
+                    if let Some(text) = metric_label_string(&values[idx]) {
+                        labels.insert(key.clone(), text);
+                    }
+                }
+                labels
+            }
+        };
+        samples.push(MetricSample { labels, value });
+    }
+    Ok(samples)
+}
+
+fn parse_metric_matrix_rows(
+    rows: Vec<Row>,
+    plan: &MetricRangeQueryPlan,
+) -> Result<Vec<MetricMatrixSample>, AppError> {
+    let mut samples = Vec::with_capacity(rows.len());
+    for row in rows {
+        let values = row.values();
+        if values.len() < 2 {
+            continue;
+        }
+        let bucket_ns = timestamp_value_to_i64(&values[0])?;
+        let value_cell = values
+            .last()
+            .ok_or_else(|| AppError::Internal("metric row is missing value column".into()))?;
+        let value = metric_value(value_cell)?;
+        let labels = match &plan.labels {
+            MetricLabelsPlan::LokiFull => {
+                if values.len() < 3 {
+                    return Err(AppError::Internal(
+                        "metric row is missing labels column".into(),
+                    ));
+                }
+                let label_value = &values[1];
+                if matches!(label_value, Value::Null) {
+                    continue;
+                }
+                parse_labels_value(label_value)?
+            }
+            MetricLabelsPlan::Columns(names) => {
+                if values.len() < names.len() + 2 {
+                    return Err(AppError::Internal(
+                        "metric row returned fewer columns than expected".into(),
+                    ));
+                }
+                let mut labels = BTreeMap::new();
+                for (idx, key) in names.iter().enumerate() {
+                    if let Some(text) = metric_label_string(&values[idx + 1]) {
+                        labels.insert(key.clone(), text);
+                    }
+                }
+                labels
+            }
+        };
+        samples.push(MetricMatrixSample {
+            labels,
+            timestamp_ns: bucket_ns,
+            value,
+        });
+    }
+    Ok(samples)
+}
+
+fn metric_label_string(value: &Value) -> Option<String> {
+    match value {
+        Value::Null => None,
+        Value::String(text) => Some(text.clone()),
+        Value::Variant(text) => Some(text.clone()),
+        Value::Boolean(flag) => Some(flag.to_string()),
+        Value::Number(num) => Some(num.to_string()),
+        other => {
+            let text = other.to_string();
+            (!text.is_empty()).then_some(text)
+        }
+    }
+}
+
+fn metric_value(value: &Value) -> Result<f64, AppError> {
+    match value {
+        Value::Number(num) => metric_number_to_f64(num),
+        Value::String(text) => text
+            .parse::<f64>()
+            .map_err(|_| AppError::Internal("metric value is not numeric".into())),
+        other => Err(AppError::Internal(format!(
+            "metric value must be numeric, found {}",
+            other
+        ))),
+    }
+}
+
+fn metric_number_to_f64(num: &NumberValue) -> Result<f64, AppError> {
+    let value = match num {
+        NumberValue::Int8(v) => *v as f64,
+        NumberValue::Int16(v) => *v as f64,
+        NumberValue::Int32(v) => *v as f64,
+        NumberValue::Int64(v) => *v as f64,
+        NumberValue::UInt8(v) => *v as f64,
+        NumberValue::UInt16(v) => *v as f64,
+        NumberValue::UInt32(v) => *v as f64,
+        NumberValue::UInt64(v) => *v as f64,
+        NumberValue::Float32(v) => *v as f64,
+        NumberValue::Float64(v) => *v,
+        NumberValue::Decimal64(v, size) => {
+            let scale = size.scale as i32;
+            let divisor = 10_f64.powi(scale);
+            *v as f64 / divisor
+        }
+        NumberValue::Decimal128(v, size) => {
+            let scale = size.scale as i32;
+            let divisor = 10_f64.powi(scale);
+            *v as f64 / divisor
+        }
+        NumberValue::Decimal256(_, _) => num
+            .to_string()
+            .parse()
+            .map_err(|_| AppError::Internal("metric decimal value overflowed".into()))?,
+    };
+    Ok(value)
 }
